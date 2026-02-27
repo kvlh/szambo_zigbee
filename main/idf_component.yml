@@ -1,0 +1,5 @@
+dependencies:
+  espressif/esp-zigbee-lib:
+    version: "~1.6.0"
+  espressif/esp-zboss-lib:
+    version: "~1.6.0"
