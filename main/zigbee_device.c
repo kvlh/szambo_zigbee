@@ -19,9 +19,6 @@ static const char *TAG = "zb_device";
 /* Measurement interval (minutes), loaded from NVS on boot */
 static uint32_t measurement_interval_min = DEFAULT_MEASUREMENT_INTERVAL_MIN;
 
-/* Sleep guard: only allow sleep after commissioning + interview complete */
-static bool sleep_ready = false;
-
 /* OTA state */
 static esp_ota_handle_t ota_handle = 0;
 static const esp_partition_t *ota_partition = NULL;
@@ -333,9 +330,7 @@ void esp_zb_app_signal_handler(esp_zb_app_signal_t *signal_struct)
                 ESP_LOGI(TAG, "Factory new - starting steering...");
                 esp_zb_bdb_start_top_level_commissioning(ESP_ZB_BDB_MODE_NETWORK_STEERING);
             } else {
-                ESP_LOGI(TAG, "Already commissioned - enabling sleep & starting sensor task");
-                sleep_ready = true;
-                enable_pm_light_sleep();
+                ESP_LOGI(TAG, "Already commissioned - starting sensor task");
                 sensor_task_start();
             }
         } else {
@@ -354,20 +349,11 @@ void esp_zb_app_signal_handler(esp_zb_app_signal_t *signal_struct)
             ESP_LOGI(TAG, "Extended PAN: %02x:%02x:%02x:%02x:%02x:%02x:%02x:%02x",
                      ext_pan_id[7], ext_pan_id[6], ext_pan_id[5], ext_pan_id[4],
                      ext_pan_id[3], ext_pan_id[2], ext_pan_id[1], ext_pan_id[0]);
-            /* Enable sleep after successful join (defer to avoid issues during interview) */
-            sleep_ready = true;
-            enable_pm_light_sleep();
             sensor_task_start();
         } else {
             ESP_LOGW(TAG, "Steering failed (status=%d), retrying in 1s...", err_status);
             vTaskDelay(pdMS_TO_TICKS(1000));
             esp_zb_bdb_start_top_level_commissioning(ESP_ZB_BDB_MODE_NETWORK_STEERING);
-        }
-        break;
-
-    case ESP_ZB_COMMON_SIGNAL_CAN_SLEEP:
-        if (sleep_ready) {
-            esp_zb_sleep_now();
         }
         break;
 
@@ -440,9 +426,6 @@ void zigbee_task(void *pvParameters)
 {
     /* Load measurement interval from NVS */
     nvs_load_interval();
-
-    /* Enable Zigbee sleep support (must be before esp_zb_init) */
-    esp_zb_sleep_enable(true);
 
     /* Zigbee stack config - end device */
     esp_zb_cfg_t zb_cfg = {

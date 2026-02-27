@@ -52,8 +52,3 @@ void zigbee_set_measurement_interval(uint32_t minutes);
  */
 uint32_t zigbee_get_measurement_interval(void);
 
-/**
- * Enable PM light sleep (called after Zigbee commissioning).
- * Defined in main.c.
- */
-void enable_pm_light_sleep(void);
