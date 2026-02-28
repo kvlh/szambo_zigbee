@@ -10,7 +10,6 @@
 #include "esp_log.h"
 #include "esp_sleep.h"
 #include "esp_timer.h"
-#include "esp_zigbee_ota.h"
 #include "esp_adc/adc_oneshot.h"
 #include "esp_adc/adc_cali.h"
 #include "esp_adc/adc_cali_scheme.h"
@@ -143,14 +142,6 @@ static void sensor_task_fn(void *pvParameters)
         ESP_LOGW(TAG, "Distance: OUT OF RANGE | Battery: %.2f V", battery_v);
     }
     zigbee_report_value(EP_BATTERY, battery_v);
-
-    /* Query OTA server for firmware update (coordinator 0x0000, endpoint 1) */
-    esp_zb_lock_acquire(portMAX_DELAY);
-    esp_err_t ota_query_err = esp_zb_ota_upgrade_client_query_image_req(0x0000, 1);
-    esp_zb_lock_release();
-    if (ota_query_err == ESP_OK) {
-        ESP_LOGI(TAG, "OTA query sent to coordinator");
-    }
 
     /* Wait for report ACK + give Z2M window to send commands (e.g. interval change) */
     vTaskDelay(pdMS_TO_TICKS(POST_REPORT_WAIT_MS));

@@ -13,7 +13,7 @@ import os
 # Must match zigbee_device.h
 MANUFACTURER_CODE = 0x1001
 IMAGE_TYPE = 0x1011
-FILE_VERSION = 0x01000004  # update this when bumping firmware version
+FILE_VERSION = 0x01000005  # update this when bumping firmware version
 ZIGBEE_STACK_VERSION = 0x0002
 
 OTA_FILE_IDENTIFIER = 0x0BEEF11E
