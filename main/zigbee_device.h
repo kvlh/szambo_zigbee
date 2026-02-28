@@ -14,7 +14,7 @@
 #define EP_TANK_HEIGHT          5   /* genAnalogOutput: tank height in mm */
 
 /* Measurement interval config */
-#define DEFAULT_MEASUREMENT_INTERVAL_MIN    60
+#define DEFAULT_MEASUREMENT_INTERVAL_MIN    1
 #define NVS_NAMESPACE           "szambo"
 #define NVS_KEY_INTERVAL        "interval"
 
