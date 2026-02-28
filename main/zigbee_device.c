@@ -19,7 +19,11 @@ static const char *TAG = "zb_device";
 /* Measurement interval (minutes), loaded from NVS on boot */
 static uint32_t measurement_interval_min = DEFAULT_MEASUREMENT_INTERVAL_MIN;
 
+/* Tank height (mm), loaded from NVS on boot */
+static uint32_t tank_height_mm = DEFAULT_TANK_HEIGHT_MM;
+
 /* OTA state */
+static volatile bool s_ota_in_progress = false;
 static esp_ota_handle_t ota_handle = 0;
 static const esp_partition_t *ota_partition = NULL;
 static uint32_t ota_total_size = 0;
@@ -124,9 +128,54 @@ uint32_t zigbee_get_measurement_interval(void)
     return measurement_interval_min;
 }
 
+/* ---------- NVS helpers for tank height ---------- */
+
+static void nvs_load_tank_height(void)
+{
+    nvs_handle_t nvs;
+    if (nvs_open(NVS_NAMESPACE, NVS_READONLY, &nvs) == ESP_OK) {
+        uint32_t val = 0;
+        if (nvs_get_u32(nvs, NVS_KEY_TANK_HEIGHT, &val) == ESP_OK && val >= 100 && val <= 10000) {
+            tank_height_mm = val;
+        }
+        nvs_close(nvs);
+    }
+    ESP_LOGI(TAG, "Tank height: %lu mm", (unsigned long)tank_height_mm);
+}
+
+static void nvs_save_tank_height(uint32_t mm)
+{
+    nvs_handle_t nvs;
+    if (nvs_open(NVS_NAMESPACE, NVS_READWRITE, &nvs) == ESP_OK) {
+        nvs_set_u32(nvs, NVS_KEY_TANK_HEIGHT, mm);
+        nvs_commit(nvs);
+        nvs_close(nvs);
+    }
+}
+
+void zigbee_set_tank_height(uint32_t mm)
+{
+    if (mm < 100) mm = 100;
+    if (mm > 10000) mm = 10000;
+    tank_height_mm = mm;
+    nvs_save_tank_height(mm);
+    ESP_LOGI(TAG, "Tank height set to %lu mm", (unsigned long)mm);
+}
+
+uint32_t zigbee_get_tank_height(void)
+{
+    return tank_height_mm;
+}
+
+bool zigbee_ota_in_progress(void)
+{
+    return s_ota_in_progress;
+}
+
 /* ---------- EP3: config endpoint (genAnalogOutput) ---------- */
 
 static uint8_t ao_description[] = {24, 'm', 'e', 'a', 's', 'u', 'r', 'e', 'm', 'e', 'n', 't', '_', 'i', 'n', 't', 'e', 'r', 'v', 'a', 'l', '_', 'm', 'i', 'n'};
+static uint8_t ao_tank_description[] = {14, 't', 'a', 'n', 'k', '_', 'h', 'e', 'i', 'g', 'h', 't', '_', 'm', 'm'};
 
 static esp_zb_cluster_list_t *create_config_endpoint_clusters(void)
 {
@@ -183,6 +232,61 @@ static esp_zb_cluster_list_t *create_config_endpoint_clusters(void)
     return cluster_list;
 }
 
+static esp_zb_cluster_list_t *create_tank_height_endpoint_clusters(void)
+{
+    esp_zb_cluster_list_t *cluster_list = esp_zb_zcl_cluster_list_create();
+
+    /* Basic cluster */
+    esp_zb_basic_cluster_cfg_t basic_cfg = {
+        .zcl_version = ESP_ZB_ZCL_BASIC_ZCL_VERSION_DEFAULT_VALUE,
+        .power_source = 0x03,
+    };
+    esp_zb_attribute_list_t *basic_cluster = esp_zb_basic_cluster_create(&basic_cfg);
+    esp_zb_basic_cluster_add_attr(basic_cluster, ESP_ZB_ZCL_ATTR_BASIC_MANUFACTURER_NAME_ID,
+                                  manufacturer_name);
+    esp_zb_basic_cluster_add_attr(basic_cluster, ESP_ZB_ZCL_ATTR_BASIC_MODEL_IDENTIFIER_ID,
+                                  model_identifier);
+    esp_zb_cluster_list_add_basic_cluster(cluster_list, basic_cluster, ESP_ZB_ZCL_CLUSTER_SERVER_ROLE);
+
+    /* Identify cluster */
+    esp_zb_identify_cluster_cfg_t identify_cfg = { .identify_time = 0 };
+    esp_zb_attribute_list_t *identify_cluster = esp_zb_identify_cluster_create(&identify_cfg);
+    esp_zb_cluster_list_add_identify_cluster(cluster_list, identify_cluster, ESP_ZB_ZCL_CLUSTER_SERVER_ROLE);
+
+    /* Analog Output cluster */
+    esp_zb_analog_output_cluster_cfg_t ao_cfg = {
+        .out_of_service = false,
+        .present_value = (float)tank_height_mm,
+        .status_flags = 0,
+    };
+    esp_zb_attribute_list_t *ao_cluster = esp_zb_analog_output_cluster_create(&ao_cfg);
+
+    /* Add description attribute */
+    esp_zb_cluster_add_attr(ao_cluster, ESP_ZB_ZCL_CLUSTER_ID_ANALOG_OUTPUT,
+                            ESP_ZB_ZCL_ATTR_ANALOG_OUTPUT_DESCRIPTION_ID,
+                            ESP_ZB_ZCL_ATTR_TYPE_CHAR_STRING,
+                            ESP_ZB_ZCL_ATTR_ACCESS_READ_ONLY,
+                            (void *)ao_tank_description);
+
+    /* Add min/max present value attributes */
+    float min_val = 100.0f;
+    float max_val = 10000.0f;
+    esp_zb_cluster_add_attr(ao_cluster, ESP_ZB_ZCL_CLUSTER_ID_ANALOG_OUTPUT,
+                            ESP_ZB_ZCL_ATTR_ANALOG_OUTPUT_MIN_PRESENT_VALUE_ID,
+                            ESP_ZB_ZCL_ATTR_TYPE_SINGLE,
+                            ESP_ZB_ZCL_ATTR_ACCESS_READ_ONLY,
+                            &min_val);
+    esp_zb_cluster_add_attr(ao_cluster, ESP_ZB_ZCL_CLUSTER_ID_ANALOG_OUTPUT,
+                            ESP_ZB_ZCL_ATTR_ANALOG_OUTPUT_MAX_PRESENT_VALUE_ID,
+                            ESP_ZB_ZCL_ATTR_TYPE_SINGLE,
+                            ESP_ZB_ZCL_ATTR_ACCESS_READ_ONLY,
+                            &max_val);
+
+    esp_zb_cluster_list_add_analog_output_cluster(cluster_list, ao_cluster, ESP_ZB_ZCL_CLUSTER_SERVER_ROLE);
+
+    return cluster_list;
+}
+
 /* ---------- SET_ATTR_VALUE callback ---------- */
 
 static esp_err_t zb_set_attr_value_handler(esp_zb_zcl_set_attr_value_message_t message)
@@ -192,22 +296,33 @@ static esp_err_t zb_set_attr_value_handler(esp_zb_zcl_set_attr_value_message_t m
         return ESP_ERR_INVALID_STATE;
     }
 
-    if (message.info.dst_endpoint == EP_CONFIG &&
-        message.info.cluster == ESP_ZB_ZCL_CLUSTER_ID_ANALOG_OUTPUT &&
+    if (message.info.cluster == ESP_ZB_ZCL_CLUSTER_ID_ANALOG_OUTPUT &&
         message.attribute.id == ESP_ZB_ZCL_ATTR_ANALOG_OUTPUT_PRESENT_VALUE_ID) {
         float val = *(float *)message.attribute.data.value;
-        uint32_t minutes = (uint32_t)val;
-        if (minutes < 1) minutes = 1;
-        if (minutes > 1440) minutes = 1440;
-        zigbee_set_measurement_interval(minutes);
 
-        /* Update the attribute to reflect clamped value */
-        float clamped = (float)minutes;
-        esp_zb_zcl_set_attribute_val(EP_CONFIG,
-            ESP_ZB_ZCL_CLUSTER_ID_ANALOG_OUTPUT,
-            ESP_ZB_ZCL_CLUSTER_SERVER_ROLE,
-            ESP_ZB_ZCL_ATTR_ANALOG_OUTPUT_PRESENT_VALUE_ID,
-            &clamped, false);
+        if (message.info.dst_endpoint == EP_CONFIG) {
+            uint32_t minutes = (uint32_t)val;
+            if (minutes < 1) minutes = 1;
+            if (minutes > 1440) minutes = 1440;
+            zigbee_set_measurement_interval(minutes);
+            float clamped = (float)minutes;
+            esp_zb_zcl_set_attribute_val(EP_CONFIG,
+                ESP_ZB_ZCL_CLUSTER_ID_ANALOG_OUTPUT,
+                ESP_ZB_ZCL_CLUSTER_SERVER_ROLE,
+                ESP_ZB_ZCL_ATTR_ANALOG_OUTPUT_PRESENT_VALUE_ID,
+                &clamped, false);
+        } else if (message.info.dst_endpoint == EP_TANK_HEIGHT) {
+            uint32_t mm = (uint32_t)val;
+            if (mm < 100) mm = 100;
+            if (mm > 10000) mm = 10000;
+            zigbee_set_tank_height(mm);
+            float clamped = (float)mm;
+            esp_zb_zcl_set_attribute_val(EP_TANK_HEIGHT,
+                ESP_ZB_ZCL_CLUSTER_ID_ANALOG_OUTPUT,
+                ESP_ZB_ZCL_CLUSTER_SERVER_ROLE,
+                ESP_ZB_ZCL_ATTR_ANALOG_OUTPUT_PRESENT_VALUE_ID,
+                &clamped, false);
+        }
     }
 
     return ESP_OK;
@@ -225,6 +340,7 @@ static esp_err_t zb_ota_upgrade_status_handler(esp_zb_zcl_ota_upgrade_value_mess
     switch (message.upgrade_status) {
     case ESP_ZB_ZCL_OTA_UPGRADE_STATUS_START:
         ESP_LOGI(TAG, "===== OTA START: total size %lu =====", (unsigned long)message.ota_header.image_size);
+        s_ota_in_progress = true;
         ota_total_size = message.ota_header.image_size;
         ota_received = 0;
         ota_partition = esp_ota_get_next_update_partition(NULL);
@@ -281,6 +397,7 @@ static esp_err_t zb_ota_upgrade_status_handler(esp_zb_zcl_ota_upgrade_value_mess
 
     case ESP_ZB_ZCL_OTA_UPGRADE_STATUS_ABORT:
         ESP_LOGW(TAG, "OTA ABORTED");
+        s_ota_in_progress = false;
         if (ota_handle) {
             esp_ota_abort(ota_handle);
             ota_handle = 0;
@@ -424,8 +541,9 @@ void zigbee_report_value(uint8_t endpoint, float value)
 
 void zigbee_task(void *pvParameters)
 {
-    /* Load measurement interval from NVS */
+    /* Load config from NVS */
     nvs_load_interval();
+    nvs_load_tank_height();
 
     /* Zigbee stack config - end device */
     esp_zb_cfg_t zb_cfg = {
@@ -473,6 +591,28 @@ void zigbee_task(void *pvParameters)
     };
     esp_zb_ep_list_add_ep(ep_list, ep3_clusters, ep3_cfg);
 
+    /* Create EP4: fill level (read-only, calculated) */
+    esp_zb_cluster_list_t *ep4_clusters = create_analog_input_endpoint_clusters("fill_level_pct");
+
+    esp_zb_endpoint_config_t ep4_cfg = {
+        .endpoint = EP_FILL_LEVEL,
+        .app_profile_id = ESP_ZB_AF_HA_PROFILE_ID,
+        .app_device_id = ESP_ZB_HA_CUSTOM_ATTR_DEVICE_ID,
+        .app_device_version = 0,
+    };
+    esp_zb_ep_list_add_ep(ep_list, ep4_clusters, ep4_cfg);
+
+    /* Create EP5: tank height (configurable) */
+    esp_zb_cluster_list_t *ep5_clusters = create_tank_height_endpoint_clusters();
+
+    esp_zb_endpoint_config_t ep5_cfg = {
+        .endpoint = EP_TANK_HEIGHT,
+        .app_profile_id = ESP_ZB_AF_HA_PROFILE_ID,
+        .app_device_id = ESP_ZB_HA_CUSTOM_ATTR_DEVICE_ID,
+        .app_device_version = 0,
+    };
+    esp_zb_ep_list_add_ep(ep_list, ep5_clusters, ep5_cfg);
+
     /* Register device */
     esp_zb_device_register(ep_list);
 
@@ -499,7 +639,10 @@ void zigbee_task(void *pvParameters)
     reporting_info.ep = EP_BATTERY;
     esp_zb_zcl_update_reporting_info(&reporting_info);
 
-    ESP_LOGI(TAG, "Zigbee device registered: EP1=distance, EP2=battery, EP3=config, OTA enabled");
+    reporting_info.ep = EP_FILL_LEVEL;
+    esp_zb_zcl_update_reporting_info(&reporting_info);
+
+    ESP_LOGI(TAG, "Zigbee device registered: EP1=distance, EP2=battery, EP3=config, EP4=fill_level, EP5=tank_height, OTA enabled");
     ESP_LOGI(TAG, "OTA: manufacturer=0x%04x, image_type=0x%04x, version=0x%08lx",
              OTA_UPGRADE_MANUFACTURER, OTA_UPGRADE_IMAGE_TYPE,
              (unsigned long)OTA_UPGRADE_FILE_VERSION);

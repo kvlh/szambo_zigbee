@@ -1,0 +1,10 @@
+[
+  {
+    "url": "https://raw.githubusercontent.com/kvlh/szambo_zigbee/main/ota/szambo_tof_native_v1.0.0.3.zigbee",
+    "manufacturerCode": 4097,
+    "imageType": 4113,
+    "fileVersion": 16777219,
+    "modelId": "szambo_tof_sensor",
+    "manufacturerName": "esphome"
+  }
+]

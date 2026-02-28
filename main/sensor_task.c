@@ -10,6 +10,7 @@
 #include "esp_log.h"
 #include "esp_sleep.h"
 #include "esp_timer.h"
+#include "esp_zigbee_ota.h"
 #include "esp_adc/adc_oneshot.h"
 #include "esp_adc/adc_cali.h"
 #include "esp_adc/adc_cali_scheme.h"
@@ -24,6 +25,8 @@ static const char *TAG = "sensor_task";
 
 #define DEEP_SLEEP_MIN_US           55000000ULL  /* 55s minimum fallback */
 #define POST_REPORT_WAIT_MS         3000         /* wait for ACK + Z2M command window */
+#define OTA_CHECK_WAIT_MS           50000        /* wait for Z2M to respond to OTA query (~35s observed) */
+#define OTA_TRANSFER_TIMEOUT_US     600000000ULL /* 10 min OTA transfer timeout */
 
 static adc_oneshot_unit_handle_t adc_handle = NULL;
 static adc_cali_handle_t adc_cali_handle = NULL;
@@ -118,17 +121,60 @@ static void sensor_task_fn(void *pvParameters)
     /* Read battery voltage */
     float battery_v = read_battery_voltage();
 
+    /* Calculate fill level if distance valid */
+    float fill_pct = -1.0f;
+    if (distance_mm >= 0) {
+        uint32_t tank_h = zigbee_get_tank_height();
+        if (tank_h > 0 && (uint32_t)distance_mm <= tank_h) {
+            fill_pct = (float)(tank_h - (uint32_t)distance_mm) / (float)tank_h * 100.0f;
+            if (fill_pct < 0.0f) fill_pct = 0.0f;
+            if (fill_pct > 100.0f) fill_pct = 100.0f;
+        } else {
+            fill_pct = 0.0f;
+        }
+    }
+
     /* Report to Zigbee coordinator */
     if (distance_mm >= 0) {
-        ESP_LOGI(TAG, "Distance: %d mm | Battery: %.2f V", distance_mm, battery_v);
+        ESP_LOGI(TAG, "Distance: %d mm | Fill: %.1f%% | Battery: %.2f V", distance_mm, fill_pct, battery_v);
         zigbee_report_value(EP_DISTANCE, (float)distance_mm);
+        zigbee_report_value(EP_FILL_LEVEL, fill_pct);
     } else {
         ESP_LOGW(TAG, "Distance: OUT OF RANGE | Battery: %.2f V", battery_v);
     }
     zigbee_report_value(EP_BATTERY, battery_v);
 
+    /* Query OTA server for firmware update (coordinator 0x0000, endpoint 1) */
+    esp_zb_lock_acquire(portMAX_DELAY);
+    esp_err_t ota_query_err = esp_zb_ota_upgrade_client_query_image_req(0x0000, 1);
+    esp_zb_lock_release();
+    if (ota_query_err == ESP_OK) {
+        ESP_LOGI(TAG, "OTA query sent to coordinator");
+    }
+
     /* Wait for report ACK + give Z2M window to send commands (e.g. interval change) */
     vTaskDelay(pdMS_TO_TICKS(POST_REPORT_WAIT_MS));
+
+    /* Wait for OTA query to fire (OTA client sends Query Next Image Request shortly after join) */
+    int64_t ota_check_start = esp_timer_get_time();
+    while (!zigbee_ota_in_progress() &&
+           (esp_timer_get_time() - ota_check_start) < (int64_t)OTA_CHECK_WAIT_MS * 1000LL) {
+        vTaskDelay(pdMS_TO_TICKS(500));
+    }
+
+    /* If OTA started, stay awake until it finishes */
+    if (zigbee_ota_in_progress()) {
+        ESP_LOGI(TAG, "OTA in progress - staying awake...");
+        int64_t ota_start = esp_timer_get_time();
+        while (zigbee_ota_in_progress()) {
+            vTaskDelay(pdMS_TO_TICKS(2000));
+            if ((esp_timer_get_time() - ota_start) > (int64_t)OTA_TRANSFER_TIMEOUT_US) {
+                ESP_LOGW(TAG, "OTA transfer timeout - going to sleep");
+                break;
+            }
+        }
+        ESP_LOGI(TAG, "OTA done or timeout");
+    }
 
     /* Calculate how long to sleep */
     int64_t elapsed_us = esp_timer_get_time() - t_start;
