@@ -27,7 +27,7 @@ static const char *TAG = "sensor_task";
 #define DEEP_SLEEP_MIN_US           55000000ULL  /* 55s minimum fallback */
 #define POST_REPORT_WAIT_MS         3000         /* wait for ACK + Z2M command window */
 #define OTA_CHECK_WAIT_MS           90000        /* wait for OTA query timer (1 min) + Z2M response */
-#define OTA_TRANSFER_TIMEOUT_US     600000000ULL /* 10 min OTA transfer timeout */
+#define OTA_TRANSFER_TIMEOUT_US     5400000000ULL /* 90 min OTA transfer timeout */
 
 static adc_oneshot_unit_handle_t adc_handle = NULL;
 static adc_cali_handle_t adc_cali_handle = NULL;
