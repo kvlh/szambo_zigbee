@@ -13,6 +13,8 @@
 #include "esp_adc/adc_oneshot.h"
 #include "esp_adc/adc_cali.h"
 #include "esp_adc/adc_cali_scheme.h"
+#include "esp_zigbee_core.h"
+#include "esp_zigbee_ota.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
@@ -96,6 +98,14 @@ static void sensor_task_fn(void *pvParameters)
     int64_t t_start = esp_timer_get_time();
 
     ESP_LOGI(TAG, "=== Measurement ===");
+
+    /* Set OTA query interval to 1 min so QueryNextImageRequest fires within
+     * the OTA_CHECK_WAIT window. Called from FreeRTOS task context (not stack
+     * signal handler) with zb_lock to avoid the assertion at zcl_ota:94. */
+    esp_zb_lock_acquire(portMAX_DELAY);
+    esp_err_t ota_iv_err = esp_zb_ota_upgrade_client_query_interval_set(EP_DISTANCE, 1);
+    esp_zb_lock_release();
+    ESP_LOGI(TAG, "OTA query interval set to 1 min: %s", esp_err_to_name(ota_iv_err));
 
     /* Initialize ADC (re-init required after every deep sleep wakeup) */
     esp_err_t err = adc_init();

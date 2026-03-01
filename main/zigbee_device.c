@@ -29,6 +29,7 @@ static esp_ota_handle_t ota_handle = 0;
 static const esp_partition_t *ota_partition = NULL;
 static uint32_t ota_total_size = 0;
 static uint32_t ota_received = 0;
+static bool ota_first_block = true;  /* track first STATUS_RECEIVE to detect sub-element header */
 
 /* ZCL char string: first byte is length, then chars (no null terminator) */
 /* ZCL char string: first byte is length, followed by the characters */
@@ -354,6 +355,7 @@ static esp_err_t zb_ota_upgrade_status_handler(esp_zb_zcl_ota_upgrade_value_mess
         s_ota_in_progress = true;
         ota_total_size = message.ota_header.image_size;
         ota_received = 0;
+        ota_first_block = true;
         ota_partition = esp_ota_get_next_update_partition(NULL);
         if (!ota_partition) {
             ESP_LOGE(TAG, "No OTA partition available");
@@ -368,11 +370,41 @@ static esp_err_t zb_ota_upgrade_status_handler(esp_zb_zcl_ota_upgrade_value_mess
         break;
 
     case ESP_ZB_ZCL_OTA_UPGRADE_STATUS_RECEIVE: {
-        ota_received += message.payload_size;
+        const uint8_t *payload_ptr = message.payload;
+        uint32_t payload_size = message.payload_size;
+
+        /* On first block: log first bytes for debugging, and skip Zigbee OTA
+         * sub-element header (tag 0x0000 + 4-byte length = 6 bytes) if present.
+         * ZBOSS in esp-zigbee-lib 1.6.x passes the sub-element header to the app;
+         * ESP-IDF esp_ota_write v5.x validates the 0xE9 magic at the first write,
+         * so we must skip these 6 bytes before writing to the OTA partition. */
+        if (ota_first_block) {
+            ota_first_block = false;
+            ESP_LOGI(TAG, "OTA first block: first bytes = %02x %02x %02x %02x %02x %02x %02x %02x",
+                     payload_size > 0 ? payload_ptr[0] : 0xFF,
+                     payload_size > 1 ? payload_ptr[1] : 0xFF,
+                     payload_size > 2 ? payload_ptr[2] : 0xFF,
+                     payload_size > 3 ? payload_ptr[3] : 0xFF,
+                     payload_size > 4 ? payload_ptr[4] : 0xFF,
+                     payload_size > 5 ? payload_ptr[5] : 0xFF,
+                     payload_size > 6 ? payload_ptr[6] : 0xFF,
+                     payload_size > 7 ? payload_ptr[7] : 0xFF);
+            /* Sub-element tag for Upgrade Image is 0x0000 (2 bytes LE). If the
+             * payload starts with 0x00 0x00, ZBOSS is passing the raw sub-element
+             * header - skip it. If it starts with 0xE9 (ESP32 magic), ZBOSS
+             * already stripped it and we write directly. */
+            if (payload_size >= 6 && payload_ptr[0] == 0x00 && payload_ptr[1] == 0x00) {
+                ESP_LOGI(TAG, "OTA: skipping 6-byte sub-element header (ZBOSS raw mode)");
+                payload_ptr += 6;
+                payload_size -= 6;
+            }
+        }
+
+        ota_received += payload_size;
         ESP_LOGI(TAG, "OTA receive: %lu / %lu bytes (%lu%%)",
                  (unsigned long)ota_received, (unsigned long)ota_total_size,
                  ota_total_size ? (unsigned long)(ota_received * 100 / ota_total_size) : 0);
-        esp_err_t err = esp_ota_write(ota_handle, message.payload, message.payload_size);
+        esp_err_t err = esp_ota_write(ota_handle, payload_ptr, payload_size);
         if (err != ESP_OK) {
             ESP_LOGE(TAG, "esp_ota_write failed: %s", esp_err_to_name(err));
             return ESP_FAIL;
