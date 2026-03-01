@@ -94,9 +94,8 @@ static float read_battery_voltage(void)
 static void sensor_task_fn(void *pvParameters)
 {
     int64_t t_start = esp_timer_get_time();
-    uint32_t interval_min = zigbee_get_measurement_interval();
 
-    ESP_LOGI(TAG, "=== Measurement (interval=%lu min) ===", (unsigned long)interval_min);
+    ESP_LOGI(TAG, "=== Measurement ===");
 
     /* Initialize ADC (re-init required after every deep sleep wakeup) */
     esp_err_t err = adc_init();
@@ -166,6 +165,9 @@ static void sensor_task_fn(void *pvParameters)
         }
         ESP_LOGI(TAG, "OTA done or timeout");
     }
+
+    /* Read interval just before sleeping — picks up any Z2M writes during wake window */
+    uint32_t interval_min = zigbee_get_measurement_interval();
 
     /* Calculate how long to sleep */
     int64_t elapsed_us = esp_timer_get_time() - t_start;
