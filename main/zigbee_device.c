@@ -9,6 +9,7 @@
 #include "esp_log.h"
 #include "esp_ota_ops.h"
 #include "esp_zigbee_core.h"
+#include "esp_zigbee_ota.h"
 #include "nvs_flash.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -448,6 +449,7 @@ void esp_zb_app_signal_handler(esp_zb_app_signal_t *signal_struct)
                 esp_zb_bdb_start_top_level_commissioning(ESP_ZB_BDB_MODE_NETWORK_STEERING);
             } else {
                 ESP_LOGI(TAG, "Already commissioned - starting sensor task");
+                esp_zb_ota_upgrade_client_query_interval_set(EP_DISTANCE, 1);
                 sensor_task_start();
             }
         } else {
@@ -466,6 +468,7 @@ void esp_zb_app_signal_handler(esp_zb_app_signal_t *signal_struct)
             ESP_LOGI(TAG, "Extended PAN: %02x:%02x:%02x:%02x:%02x:%02x:%02x:%02x",
                      ext_pan_id[7], ext_pan_id[6], ext_pan_id[5], ext_pan_id[4],
                      ext_pan_id[3], ext_pan_id[2], ext_pan_id[1], ext_pan_id[0]);
+            esp_zb_ota_upgrade_client_query_interval_set(EP_DISTANCE, 1);
             sensor_task_start();
         } else {
             ESP_LOGW(TAG, "Steering failed (status=%d), retrying in 1s...", err_status);
