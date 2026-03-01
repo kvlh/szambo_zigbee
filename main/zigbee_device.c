@@ -87,6 +87,16 @@ static void add_ota_client_cluster(esp_zb_cluster_list_t *cluster_list)
     };
     esp_zb_attribute_list_t *ota_cluster = esp_zb_ota_cluster_create(&ota_cfg);
 
+    /* Set timer_query=1 min so QueryNextImageRequest fires within the OTA wake window.
+     * Default SDK init sets timer_counter=1440 (24h). Setting the client variable
+     * attribute (0xfff1) overrides this at cluster creation time (safe, not runtime). */
+    esp_zb_zcl_ota_upgrade_client_variable_t ota_var = {
+        .timer_query  = 1,
+        .hw_version   = OTA_UPGRADE_HW_VERSION,
+        .max_data_size = OTA_UPGRADE_MAX_DATA_SIZE,
+    };
+    esp_zb_ota_cluster_add_attr(ota_cluster, 0xfff1, &ota_var);
+
     esp_zb_cluster_list_add_ota_cluster(cluster_list, ota_cluster, ESP_ZB_ZCL_CLUSTER_CLIENT_ROLE);
 }
 
@@ -449,7 +459,6 @@ void esp_zb_app_signal_handler(esp_zb_app_signal_t *signal_struct)
                 esp_zb_bdb_start_top_level_commissioning(ESP_ZB_BDB_MODE_NETWORK_STEERING);
             } else {
                 ESP_LOGI(TAG, "Already commissioned - starting sensor task");
-                esp_zb_ota_upgrade_client_query_interval_set(EP_DISTANCE, 1);
                 sensor_task_start();
             }
         } else {
@@ -468,7 +477,6 @@ void esp_zb_app_signal_handler(esp_zb_app_signal_t *signal_struct)
             ESP_LOGI(TAG, "Extended PAN: %02x:%02x:%02x:%02x:%02x:%02x:%02x:%02x",
                      ext_pan_id[7], ext_pan_id[6], ext_pan_id[5], ext_pan_id[4],
                      ext_pan_id[3], ext_pan_id[2], ext_pan_id[1], ext_pan_id[0]);
-            esp_zb_ota_upgrade_client_query_interval_set(EP_DISTANCE, 1);
             sensor_task_start();
         } else {
             ESP_LOGW(TAG, "Steering failed (status=%d), retrying in 1s...", err_status);

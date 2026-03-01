@@ -25,7 +25,7 @@
 /* OTA identifiers */
 #define OTA_UPGRADE_MANUFACTURER    0x1001
 #define OTA_UPGRADE_IMAGE_TYPE      0x1011
-#define OTA_UPGRADE_FILE_VERSION    0x01000006  /* 1.0.0.6 */
+#define OTA_UPGRADE_FILE_VERSION    0x01000006  /* 1.0.0.6 - currently on device */
 #define OTA_UPGRADE_HW_VERSION      1
 #define OTA_UPGRADE_MAX_DATA_SIZE   64
 
