@@ -116,12 +116,37 @@ static void sensor_task_fn(void *pvParameters)
     /* Brief delay for Zigbee stack to stabilize after join/rejoin */
     vTaskDelay(pdMS_TO_TICKS(500));
 
-    /* Power on TOF, measure, power off */
     int distance_mm = -1;
     err = vl53l0x_power_on();
     if (err == ESP_OK) {
-        distance_mm = vl53l0x_read_distance_mm();
+        int measurements[5];
+        int valid_count = 0;
+        
+        for (int i = 0; i < 5; i++) {
+            int d = vl53l0x_read_distance_mm();
+            if (d >= 0) {
+                measurements[valid_count++] = d;
+            }
+            vTaskDelay(pdMS_TO_TICKS(50));
+        }
         vl53l0x_power_off();
+        
+        if (valid_count > 0) {
+            // Proste sortowanie bąbelkowe by znaleźć medianę
+            for (int i = 0; i < valid_count - 1; i++) {
+                for (int j = i + 1; j < valid_count; j++) {
+                    if (measurements[i] > measurements[j]) {
+                        int temp = measurements[i];
+                        measurements[i] = measurements[j];
+                        measurements[j] = temp;
+                    }
+                }
+            }
+            distance_mm = measurements[valid_count / 2];
+            ESP_LOGI(TAG, "ToF valid points: %d, Median distance: %d mm", valid_count, distance_mm);
+        } else {
+            ESP_LOGE(TAG, "ToF read failed to get any valid data.");
+        }
     } else {
         ESP_LOGE(TAG, "TOF power on failed: %s", esp_err_to_name(err));
     }
@@ -178,6 +203,12 @@ static void sensor_task_fn(void *pvParameters)
 
     /* Read interval just before sleeping — picks up any Z2M writes during wake window */
     uint32_t interval_min = zigbee_get_measurement_interval();
+    
+    /* Adaptive polling: if tank is > 80% full, limit sleep to max 10 minutes */
+    if (fill_pct >= 80.0f && interval_min > 10) {
+        ESP_LOGI(TAG, "Tank > 80%% full (%.1f%%). Temporarily forcing 10 min interval over %lu min.", fill_pct, (unsigned long)interval_min);
+        interval_min = 10;
+    }
 
     /* Calculate how long to sleep */
     int64_t elapsed_us = esp_timer_get_time() - t_start;
